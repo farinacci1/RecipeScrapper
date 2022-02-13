@@ -10,60 +10,21 @@ class RecipeScraper {
   * title, description, servings, total time, ingredients and instructions
   * */
 
-  static String websiteBaseUrl = "";
+
   static final List<RegExp> _dataSchemes = [
     RegExp(r'(?<=type="application/ld\+json">)(.*?)(?=</script>)',
         multiLine: true, dotAll: true),
   ];
 
-  static const List<String> supportedSchemes = [
-    "https://",
-    "https://www.",
-    "http://",
-    "http://www.",
-    ""
-  ];
-  static const List<String> supportedUrls = [
-    "allrecipes.com/",
-    "simplyrecipes.com/",
-    "yummly.com/",
-    "101cookbooks.com/",
-    "bbc.co.uk/",
-    "bbcgoodfood.com/",
-    "bonappetit.com/",
-    "closetcooking.com/",
-    "cookstr.com/",
-    "epicurious.com/",
-    "foodrepublic.com/",
-    "jamieoliver.com/",
-    "mybakingaddiction.com/",
-    "paninihappy.com/",
-    "realsimple.com/",
-    "steamykitchen.com/",
-    "tastykitchen.com/",
-    "thevintagemixer.com/",
-    "twopeasandtheirpod.com/",
-    "whatsgabycooking.com/"
-  ];
 
-  static bool isValidUrl(String inputUrl) {
-    print(inputUrl);
-    for (String baseUrl in supportedUrls) {
-      for (String scheme in supportedSchemes) {
-        String urlChoice = scheme + baseUrl;
-
-        if (inputUrl.startsWith(urlChoice)) {
-          websiteBaseUrl = urlChoice;
-          return true;
-        }
-      }
-    }
-    return false;
-  }
 
   static Future<Map<String, dynamic>> scrapeUrl(String inputUrl) async {
+    Uri urlData = Uri.parse(inputUrl);
+    String websiteBaseUrl = urlData.scheme +"://" +  urlData.host;
+    String route = urlData.path + urlData.query;
+
     Map<String, dynamic> jsonData =
-        await _processWebpage(websiteBaseUrl, inputUrl);
+        await _processWebpage(websiteBaseUrl, route);
 
     if (jsonData.isEmpty) {
       return {};
@@ -80,6 +41,7 @@ class RecipeScraper {
     ];
     jsonData.removeWhere((key, value) => _validKeys.contains(key) == false);
     jsonData.addAll({"recipeUrl": inputUrl});
+    print(jsonData);
     return _prepareData(jsonData);
   }
 
@@ -89,45 +51,45 @@ class RecipeScraper {
     double servingSize = 0;
     List<String> steps = [];
     if (jsonData.containsKey("totalTime")) {
-      totalTime = _processPandasTimeString(jsonData["totalTime"]);
+      totalTime = _processTimeString(jsonData["totalTime"]);
     } else {
       if (jsonData.containsKey("cookTime"))
-        totalTime += _processPandasTimeString(jsonData["cookTime"]);
+        totalTime += _processTimeString(jsonData["cookTime"]);
       if (jsonData.containsKey("prepTime"))
-        totalTime += _processPandasTimeString(jsonData["prepTime"]);
+        totalTime += _processTimeString(jsonData["prepTime"]);
     }
     if (jsonData.containsKey("recipeYield")) {
       RegExp regex = RegExp(r'([\+\-]*\d*\.*\d+)');
       String numString = regex.stringMatch(jsonData["recipeYield"].toString());
       servingSize = num.parse(numString).toDouble();
     }
-
-    for (int idx = 0; idx < jsonData["recipeInstructions"].length; idx++) {
-      List<String> stepsProcessed = _processSteps(jsonData["recipeInstructions"][idx]);
-      steps.addAll(stepsProcessed);
+    if (jsonData.containsKey("recipeInstructions")) {
+      for (int idx = 0; idx < jsonData["recipeInstructions"].length; idx++) {
+        List<String> stepsProcessed =
+            _processSteps(jsonData["recipeInstructions"][idx]);
+        steps.addAll(stepsProcessed);
+      }
     }
     processedJson.addAll({
-      "title": jsonData["name"],
-      "description": jsonData["description"],
+      "title": jsonData["name"] ?? "",
+      "description": jsonData["description"] ?? "",
       "totalTime": Conversion.prepTimeFromInt(totalTime),
-      "serving size": servingSize,
-      "ingredients": jsonData["recipeIngredient"],
+      "serving size": servingSize ?? 0.0,
+      "ingredients": jsonData["recipeIngredient"] ?? [],
       "steps": steps
     });
-    print(processedJson);
     return processedJson;
   }
 
   static List<String> _processSteps(Map<String, dynamic> instructionBlock) {
     List<String> steps = [];
     if (instructionBlock["@type"] == "HowToSection") {
-      List<Map<String,dynamic>> stepList = instructionBlock["itemListElement"];
-      stepList.forEach((Map<String,dynamic> stepInstruction) {
-        if(stepInstruction["@type"] == "HowToStep"){
+      List<Map<String, dynamic>> stepList = instructionBlock["itemListElement"];
+      stepList.forEach((Map<String, dynamic> stepInstruction) {
+        if (stepInstruction["@type"] == "HowToStep") {
           steps.add(stepInstruction["text"]);
         }
       });
-
     } else if (instructionBlock["@type"] == "HowToStep") {
       steps.add(instructionBlock["text"]);
     }
@@ -136,10 +98,7 @@ class RecipeScraper {
   }
 
   static Future<Map<String, dynamic>> _processWebpage(
-      String baseUrl, String fullPath) async {
-    String route = fullPath.substring(baseUrl.length);
-    print(baseUrl);
-    print(route);
+      String baseUrl, String route) async {
     try {
       WebScraper webScraper = WebScraper(baseUrl);
       try {
@@ -158,7 +117,7 @@ class RecipeScraper {
           return {};
         }
       } catch (e) {
-        CustomToast("Either recipe is not found or is un-serializable.");
+        CustomToast("Either recipe is not found or recipe data does not match allowed scheme.");
         return {};
       }
     } catch (e) {
@@ -169,10 +128,7 @@ class RecipeScraper {
   }
 
   static void _printLarge(String pageContent) {
-    /*
-    * helpful when trying to print page contents of html document
-    */
-    final pattern = RegExp('.{1,500}'); 
+    final pattern = RegExp('.{1,800}'); // 800 is the size of each chunk
     pattern.allMatches(pageContent).forEach((match) => print(match.group(0)));
   }
 
@@ -181,43 +137,111 @@ class RecipeScraper {
     return out;
   }
 
+  static int _processTimeString(String time) {
+    String timeStr = time.toLowerCase().trim();
+
+    if (timeStr.startsWith("p")) {
+      return _processPandasTimeString(timeStr);
+    }
+    return _processRegularTime(timeStr);
+  }
+
+  static int _processRegularTime(String timeString) {
+    //Minutes Seconds hours days
+    String timeStr = "";
+    try {
+      List<String> timeTokens = timeString.split(" ");
+      for (String token in timeTokens) {
+        print(token);
+        if (token.startsWith("y"))
+          timeStr = "$timeStr Years ";
+        else if (token.startsWith("d"))
+          timeStr = "$timeStr Days ";
+        else if (token.startsWith("h"))
+          timeStr = "$timeStr Hours ";
+        else if (token.startsWith("m"))
+          timeStr = "$timeStr Minutes ";
+        else if (token.startsWith("s"))
+          timeStr = "$timeStr Seconds ";
+        else
+          timeStr = '$timeStr $token';
+      }
+      timeStr = timeStr.replaceAll(RegExp(r"\s+"), " ").trim();
+      if (timeStr.trim().length == 0) {
+        timeStr = "0 Days 0 Hours 0 Minutes";
+        return Conversion.prepTimeToInt(timeStr);
+      }
+      List<String> processedStr = timeStr.split(" ");
+      print(processedStr);
+      if (processedStr[1] == "Years") {
+        processedStr.removeRange(0, 2);
+      }
+      if (processedStr.last == "Seconds") {
+        int listLen = processedStr.length;
+        processedStr.removeRange(listLen - 2, listLen);
+      }
+      if (processedStr.isEmpty || processedStr[1] != "Days") {
+        processedStr.insert(0, "0");
+        processedStr.insert(1, "Days");
+      }
+      if (processedStr.length == 2 || processedStr[3] != "Hours") {
+        processedStr.insert(2, "0");
+        processedStr.insert(3, "Hours");
+      }
+      if (processedStr.length == 4 || processedStr[5] != "Minutes") {
+        processedStr.insert(4, "0");
+        processedStr.insert(5, "Minutes");
+      }
+      print(processedStr);
+      timeStr = processedStr.join(" ");
+      return Conversion.prepTimeToInt(timeStr);
+    } catch (e) {
+      return 0;
+    }
+  }
+
   static int _processPandasTimeString(String timeString) {
-    bool hasYear = timeString.contains("Y");
-    bool hasDays = timeString.contains("D");
-    bool hasHours = timeString.contains("H");
-    bool hasMin = timeString.contains("M");
-    bool hasSec = timeString.contains("S");
+    try {
+      bool hasYear = timeString.contains("y");
+      bool hasDays = timeString.contains("d");
+      bool hasHours = timeString.contains("h");
+      bool hasMin = timeString.contains("m");
+      bool hasSec = timeString.contains("s");
 
-    List<String> time = timeString
-        .replaceAll(RegExp(r'[a-zA-Z]'), " ")
-        .replaceAll(RegExp(r"\s+"), " ")
-        .trim()
-        .split(" ");
+      List<String> time = timeString
+          .replaceAll(RegExp(r'[a-zA-Z]'), " ")
+          .replaceAll(RegExp(r"\s+"), " ")
+          .trim()
+          .split(" ");
 
-    // need string to be in this format: "0 Days 0 Hours 0 Minutes";
-    if (hasYear) time.removeAt(0);
-    if (hasSec) time.removeLast();
+      // need string to be in this format: "0 Days 0 Hours 0 Minutes";
+      if (hasYear) time.removeAt(0);
+      if (hasSec) time.removeLast();
 
-    if (hasDays)
-      time.insert(1, "Days");
-    else {
-      time.insert(0, "0");
-      time.insert(1, "Days");
+      if (hasDays)
+        time.insert(1, "Days");
+      else {
+        time.insert(0, "0");
+        time.insert(1, "Days");
+      }
+      if (hasHours) {
+        time.insert(3, "Hours");
+      } else {
+        time.insert(2, "0");
+        time.insert(3, "Hours");
+      }
+      if (hasMin) {
+        time.insert(5, "Minutes");
+      } else {
+        time.insert(4, "0");
+        time.insert(5, "Minutes");
+      }
+      String timeStr = time.join(" ");
+      print(timeStr);
+
+      return Conversion.prepTimeToInt(timeStr);
+    } catch (e) {
+      return 0;
     }
-    if (hasHours) {
-      time.insert(3, "Hours");
-    } else {
-      time.insert(2, "0");
-      time.insert(3, "Hours");
-    }
-    if (hasMin) {
-      time.insert(5, "Minutes");
-    } else {
-      time.insert(4, "0");
-      time.insert(5, "Minutes");
-    }
-    String timeStr = time.join(" ");
-    //OF FORM: 0 Days 0 Hours 0 Minutes
-    return timeStr;
   }
 }
